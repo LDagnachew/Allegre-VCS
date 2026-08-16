@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "allegrevcs-diff"
+version = "0.1.0"
+description = "Measure-level MusicXML diff engine for AllegreVCS"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "music21>=9.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+allegrevcs-diff = "allegrevcs_diff.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["allegrevcs_diff*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
