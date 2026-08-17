@@ -9,5 +9,6 @@ declare module 'verovio/esm' {
     loadData(data: string): boolean
     renderToSVG(page?: number): string
     getPageCount(): number
+    getElementAttr(elementId: string): Record<string, string>
   }
 }

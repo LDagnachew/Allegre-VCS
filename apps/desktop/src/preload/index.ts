@@ -4,6 +4,7 @@ import type {
   AppStatus,
   Commit,
   CommitPreview,
+  CommitProgressStage,
   DiffResult,
   Project,
 } from '../shared/types'
@@ -27,6 +28,9 @@ const api = {
   getCommitMusicXml: (commitId: string): Promise<string> =>
     ipcRenderer.invoke(IpcChannels.getCommitMusicXml, commitId),
 
+  getWorkingMusicXml: (): Promise<string> =>
+    ipcRenderer.invoke(IpcChannels.getWorkingMusicXml),
+
   diffCommits: (aId: string, bId: string): Promise<DiffResult> =>
     ipcRenderer.invoke(IpcChannels.diffCommits, aId, bId),
 
@@ -40,6 +44,9 @@ const api = {
   locateMuseScore: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannels.locateMuseScore),
 
+  pickMuseScore: (): Promise<string | null> =>
+    ipcRenderer.invoke(IpcChannels.pickMuseScore),
+
   setMuseScorePath: (filePath: string): Promise<string> =>
     ipcRenderer.invoke(IpcChannels.setMuseScorePath, filePath),
 
@@ -49,6 +56,17 @@ const api = {
     }
     ipcRenderer.on(IpcChannels.statusChanged, listener)
     return () => ipcRenderer.removeListener(IpcChannels.statusChanged, listener)
+  },
+
+  onCommitProgress: (cb: (stage: CommitProgressStage) => void): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      stage: CommitProgressStage,
+    ): void => {
+      cb(stage)
+    }
+    ipcRenderer.on(IpcChannels.commitProgress, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.commitProgress, listener)
   },
 }
 

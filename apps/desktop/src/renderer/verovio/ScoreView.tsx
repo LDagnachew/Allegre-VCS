@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import createVerovioModule from 'verovio/wasm'
 import { VerovioToolkit } from 'verovio/esm'
+import {
+  applyMeasureHighlights,
+  scrollToMeasure,
+  type MeasureHighlight,
+} from './highlightMeasures'
 
 let toolkitPromise: Promise<VerovioToolkit> | null = null
 
@@ -15,12 +20,25 @@ function getToolkit(): Promise<VerovioToolkit> {
 
 interface ScoreViewProps {
   musicXml: string | null
-  highlightMeasures?: number[]
+  highlights?: MeasureHighlight[]
+  focusedMeasure?: number | null
 }
 
-export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) {
+export function ScoreView({
+  musicXml,
+  highlights = [],
+  focusedMeasure = null,
+}: ScoreViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const toolkitRef = useRef<VerovioToolkit | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [rendered, setRendered] = useState(0)
+
+  const highlightKey = useMemo(
+    () =>
+      highlights.map((h) => `${h.number}:${h.tone ?? 'changed'}`).join(','),
+    [highlights],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -28,11 +46,13 @@ export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) 
     async function render(): Promise<void> {
       if (!musicXml || !hostRef.current) {
         if (hostRef.current) hostRef.current.innerHTML = ''
+        setRendered((n) => n + 1)
         return
       }
 
       try {
         const tk = await getToolkit()
+        toolkitRef.current = tk
         if (cancelled) return
 
         tk.setOptions({
@@ -43,6 +63,9 @@ export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) 
           header: 'none',
           breaks: 'encoded',
           inputFrom: 'musicxml',
+          svgViewBox: true,
+          // Expose measure numbers via getElementAttr when available
+          svgAdditionalAttribute: ['measure@n', 'measure@label'],
         })
         tk.loadData(musicXml)
         const pageCount = tk.getPageCount()
@@ -52,17 +75,8 @@ export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) 
         }
         if (cancelled || !hostRef.current) return
         hostRef.current.innerHTML = pages.join('\n')
-
-        for (const n of highlightMeasures) {
-          const nodes = hostRef.current.querySelectorAll(
-            `[data-id*="measure-${n}"], .measure[id*="${n}"]`,
-          )
-          nodes.forEach((node) => {
-            ;(node as SVGElement).style.outline = '2px solid #0f6a6a'
-            ;(node as SVGElement).style.outlineOffset = '2px'
-          })
-        }
         setError(null)
+        setRendered((n) => n + 1)
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       }
@@ -72,7 +86,20 @@ export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) 
     return () => {
       cancelled = true
     }
-  }, [musicXml, highlightMeasures])
+  }, [musicXml])
+
+  useEffect(() => {
+    const host = hostRef.current
+    const tk = toolkitRef.current
+    if (!host || !tk || !musicXml) return
+
+    applyMeasureHighlights(host, tk, highlights, focusedMeasure)
+
+    if (focusedMeasure != null) {
+      // Defer until rects exist in layout
+      requestAnimationFrame(() => scrollToMeasure(host, focusedMeasure))
+    }
+  }, [highlightKey, highlights, focusedMeasure, rendered, musicXml])
 
   if (!musicXml) {
     return (
@@ -85,6 +112,20 @@ export function ScoreView({ musicXml, highlightMeasures = [] }: ScoreViewProps) 
   return (
     <>
       {error && <div className="error-banner">Verovio: {error}</div>}
+      {highlights.length > 0 && (
+        <div className="highlight-legend" aria-live="polite">
+          <span>
+            Highlighting <strong>{highlights.length}</strong> changed measure
+            {highlights.length === 1 ? '' : 's'}
+          </span>
+          <span className="legend-swatches">
+            <span className="swatch swatch-added">add</span>
+            <span className="swatch swatch-removed">remove</span>
+            <span className="swatch swatch-changed">change</span>
+            <span className="swatch swatch-mixed">mixed</span>
+          </span>
+        </div>
+      )}
       <div className="score-frame" ref={hostRef} />
     </>
   )

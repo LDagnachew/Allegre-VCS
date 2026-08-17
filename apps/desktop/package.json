@@ -13,7 +13,8 @@
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac dmg"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
@@ -44,12 +45,18 @@
       "out/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*"
+    ],
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
       ],
-      "category": "public.app-category.music"
+      "category": "public.app-category.music",
+      "identity": null
     },
     "linux": {
       "target": [

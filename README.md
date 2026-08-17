@@ -122,4 +122,11 @@ npm install
 npm run dev
 ```
 
-Open a `.mscz` file, or a `.musicxml` fixture from `packages/diff-engine/tests/fixtures/` to exercise the commit loop without MuseScore conversion.
+Last opened score is restored on launch.
+
+```bash
+cd apps/desktop
+npm run dist:mac
+```
+
+Installer: `apps/desktop/release/*.dmg`

@@ -43,7 +43,7 @@ CREATE INDEX commits_project_ts ON commits(project_id, timestamp);
 
 - Content-addressed: filename = SHA-256 of MusicXML UTF-8 bytes
 - Immutable once written
-- Dedupes identical snapshots for free
+- Dedupes identical snapshots for free (shared across projects in the same vault)
 
 ### Commit
 
@@ -51,7 +51,7 @@ CREATE INDEX commits_project_ts ON commits(project_id, timestamp);
 { id, projectId, message, timestamp, blobHash, parentCommitId | null }
 ```
 
-Linear history for Phase 1: each commit has at most one parent. `parent_commit_id` is nullable so the first commit has no parent, and Phase 2 can add a second parent column for merges later.
+Linear history for Phase 1: each commit has at most one parent. Commits always belong to exactly one project.
 
 ### Project
 
@@ -59,4 +59,4 @@ Linear history for Phase 1: each commit has at most one parent. `parent_commit_i
 { id, name, msczPath, lastKnownHash }
 ```
 
-`lastKnownHash` is the content hash of the working `.mscz` (or imported MusicXML) at the last successful commit. The file watcher compares the current hash against this to enable the Commit action.
+One project per absolute score path (`mscz_path` is unique). Opening a different `.mscz` / `.musicxml` activates that project’s timeline — it does not overwrite another score’s history. `meta.active_project_id` records which project is currently open.

@@ -1,23 +1,39 @@
 import { useState } from 'react'
-import type { CommitPreview, DiffResult } from '../../shared/types'
+import type {
+  CommitPreview,
+  CommitProgressStage,
+  DiffResult,
+} from '../../shared/types'
 import { DiffView } from './DiffView'
+
+const PROGRESS_COPY: Record<Exclude<CommitProgressStage, 'idle'>, string> = {
+  converting: 'Converting score with MuseScore…',
+  diffing: 'Comparing with last commit…',
+  saving: 'Saving snapshot…',
+}
 
 interface CommitPanelProps {
   canCommit: boolean
   reminder: string
   busy: boolean
+  progress: CommitProgressStage
+  focusedMeasure: number | null
   onPreview: () => Promise<CommitPreview>
   onConfirm: (message: string, preview: CommitPreview) => Promise<void>
-  compareDiff: DiffResult | null
+  onPreviewDiffChange: (diff: DiffResult | null) => void
+  onMeasureClick: (measureNumber: number) => void
 }
 
 export function CommitPanel({
   canCommit,
   reminder,
   busy,
+  progress,
+  focusedMeasure,
   onPreview,
   onConfirm,
-  compareDiff,
+  onPreviewDiffChange,
+  onMeasureClick,
 }: CommitPanelProps) {
   const [message, setMessage] = useState('')
   const [preview, setPreview] = useState<CommitPreview | null>(null)
@@ -28,6 +44,10 @@ export function CommitPanel({
     try {
       const next = await onPreview()
       setPreview(next)
+      onPreviewDiffChange({
+        summary: next.summary,
+        measures: next.measures,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -40,13 +60,34 @@ export function CommitPanel({
       await onConfirm(message, preview)
       setMessage('')
       setPreview(null)
+      onPreviewDiffChange(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
+  const stageCopy =
+    progress !== 'idle' ? PROGRESS_COPY[progress] : busy ? 'Working…' : null
+  const firstSnapshot =
+    preview &&
+    preview.measures.length === 0 &&
+    preview.summary.additions <= 1 &&
+    preview.summary.deletions === 0
+
   return (
-    <div>
+    <div className="commit-panel">
+      {stageCopy && (
+        <div className="commit-progress" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          <div>
+            <strong>{stageCopy}</strong>
+            <div className="muted" style={{ fontSize: '0.8rem' }}>
+              This can take a few seconds on large scores.
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="reminder">{reminder}</div>
 
       <div className="field">
@@ -83,17 +124,37 @@ export function CommitPanel({
       {error && <div className="error-banner">{error}</div>}
 
       {preview && (
-        <div style={{ marginTop: '1rem' }}>
+        <div className="commit-ready">
+          <h3 className="panel-title" style={{ marginBottom: '0.35rem' }}>
+            Ready to commit
+          </h3>
+          {firstSnapshot ? (
+            <p className="muted" style={{ marginTop: 0 }}>
+              First snapshot of this score.
+            </p>
+          ) : (
+            <div className="diff-summary">
+              <div className="diff-stat">
+                <strong>{preview.summary.additions}</strong>
+                <span className="muted">additions</span>
+              </div>
+              <div className="diff-stat">
+                <strong>{preview.summary.deletions}</strong>
+                <span className="muted">deletions</span>
+              </div>
+              <div className="diff-stat">
+                <strong>{preview.summary.changes}</strong>
+                <span className="muted">changes</span>
+              </div>
+            </div>
+          )}
           <DiffView
             diff={{ summary: preview.summary, measures: preview.measures }}
-            title="Working tree diff"
+            title="Changed measures"
+            hideSummary
+            focusedMeasure={focusedMeasure}
+            onMeasureClick={onMeasureClick}
           />
-        </div>
-      )}
-
-      {compareDiff && (
-        <div style={{ marginTop: '1.25rem' }}>
-          <DiffView diff={compareDiff} title="Commit compare" />
         </div>
       )}
     </div>

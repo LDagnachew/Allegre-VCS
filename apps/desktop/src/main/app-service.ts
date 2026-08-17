@@ -5,8 +5,10 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { IpcChannels } from '../shared/ipc'
 import {
   REMINDER,
+  type AppSettings,
   type AppStatus,
   type CommitPreview,
+  type CommitProgressStage,
   type DiffResult,
 } from '../shared/types'
 import {
@@ -24,6 +26,8 @@ export class AllegreApp {
   private museScorePath: string | null = null
   private window: BrowserWindow | null = null
   private workingHash: string | null = null
+  private currentProjectId: string | null = null
+  private ipcRegistered = false
 
   async init(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -34,10 +38,21 @@ export class AllegreApp {
       const vaultRoot = path.join(app.getPath('userData'), 'vault', 'default')
       this.vault = new Vault(vaultRoot)
 
-      const project = this.vault.getProject()
+      let project = this.vault.getProject()
+      if (!project || !fs.existsSync(project.msczPath)) {
+        const lastPath = this.loadSettings().lastScorePath
+        if (lastPath && fs.existsSync(lastPath)) {
+          project = this.vault.openOrCreateProject(lastPath)
+        } else {
+          project = null
+        }
+      }
+
+      this.currentProjectId = project?.id ?? null
       if (project && fs.existsSync(project.msczPath)) {
         this.attachWatcher(project.msczPath)
         this.workingHash = hashFile(project.msczPath)
+        this.saveSettings({ lastScorePath: project.msczPath })
       }
     } catch (err) {
       console.error('Failed to initialize vault:', err)
@@ -60,23 +75,31 @@ export class AllegreApp {
     return path.join(app.getPath('userData'), 'settings.json')
   }
 
-  private loadSavedMuseScorePath(): string | null {
+  private loadSettings(): AppSettings {
     try {
       const raw = fs.readFileSync(this.settingsPath(), 'utf8')
-      const data = JSON.parse(raw) as { museScorePath?: string }
-      return data.museScorePath ?? null
+      return JSON.parse(raw) as AppSettings
     } catch {
-      return null
+      return {}
     }
   }
 
-  private saveMuseScorePath(museScorePath: string): void {
+  private saveSettings(patch: AppSettings): void {
+    const next = { ...this.loadSettings(), ...patch }
     fs.mkdirSync(path.dirname(this.settingsPath()), { recursive: true })
-    fs.writeFileSync(
-      this.settingsPath(),
-      JSON.stringify({ museScorePath }, null, 2),
-      'utf8',
-    )
+    fs.writeFileSync(this.settingsPath(), JSON.stringify(next, null, 2), 'utf8')
+  }
+
+  private loadSavedMuseScorePath(): string | null {
+    return this.loadSettings().museScorePath ?? null
+  }
+
+  private saveMuseScorePath(museScorePath: string): void {
+    this.saveSettings({ museScorePath })
+  }
+
+  private emitProgress(stage: CommitProgressStage): void {
+    this.window?.webContents.send(IpcChannels.commitProgress, stage)
   }
 
   private attachWatcher(filePath: string): void {
@@ -98,7 +121,9 @@ export class AllegreApp {
     }
 
     const vault = this.vault
-    const project = vault.getProject()
+    const project = this.currentProjectId
+      ? vault.getProjectById(this.currentProjectId)
+      : vault.getProject()
     const commits = project ? vault.listCommits(project.id) : []
     const currentHash =
       this.workingHash ??
@@ -152,12 +177,46 @@ export class AllegreApp {
   }
 
   private registerIpc(): void {
+    if (this.ipcRegistered) return
+    this.ipcRegistered = true
+
+    const sendOnly = new Set<string>([
+      IpcChannels.statusChanged,
+      IpcChannels.commitProgress,
+    ])
+    const invokeChannels = Object.values(IpcChannels).filter(
+      (channel) => !sendOnly.has(channel),
+    )
+    for (const channel of invokeChannels) {
+      ipcMain.removeHandler(channel)
+    }
     ipcMain.handle(IpcChannels.getStatus, () => this.getStatus())
 
     ipcMain.handle(IpcChannels.locateMuseScore, async () => {
       this.museScorePath = await locateMuseScore(this.museScorePath)
       this.emitStatus()
       return this.museScorePath
+    })
+
+    ipcMain.handle(IpcChannels.pickMuseScore, async () => {
+      const result = await dialog.showOpenDialog({
+        title: 'Locate MuseScore CLI',
+        properties: ['openFile'],
+        defaultPath:
+          process.platform === 'darwin' ? '/Applications' : undefined,
+        message:
+          'Select the MuseScore executable (on macOS: MuseScore 4.app/Contents/MacOS/mscore)',
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      let chosen = result.filePaths[0]
+      if (process.platform === 'darwin' && chosen.endsWith('.app')) {
+        const nested = path.join(chosen, 'Contents/MacOS/mscore')
+        if (fs.existsSync(nested)) chosen = nested
+      }
+      this.museScorePath = chosen
+      this.saveMuseScorePath(chosen)
+      this.emitStatus()
+      return chosen
     })
 
     ipcMain.handle(IpcChannels.setMuseScorePath, async (_e, filePath: string) => {
@@ -194,10 +253,19 @@ export class AllegreApp {
         scorePath = path.join(scorePath, found)
       }
 
+      scorePath = path.resolve(scorePath)
+
       const vault = this.vaultOrThrow()
       const project = vault.openOrCreateProject(scorePath)
-      this.attachWatcher(scorePath)
-      this.workingHash = hashFile(scorePath)
+      this.currentProjectId = project.id
+
+      // Always rebind watcher/hash when switching (even back to a known score).
+      this.attachWatcher(project.msczPath)
+      this.workingHash = fs.existsSync(project.msczPath)
+        ? hashFile(project.msczPath)
+        : null
+      this.saveSettings({ lastScorePath: project.msczPath })
+
       this.emitStatus()
       return project
     })
@@ -209,38 +277,43 @@ export class AllegreApp {
         const project = vault.getProject()
         if (!project) throw new Error('No project open')
 
-        const { musicXml, workingHash } = await this.snapshotWorkingScore(
-          project.msczPath,
-        )
-
-        const head = vault.getHeadCommit(project.id)
-        let diff: DiffResult
-        if (!head) {
-          diff = {
-            summary: {
-              additions: 0,
-              deletions: 0,
-              changes: 0,
-            },
-            measures: [],
-          }
-          // Treat first commit as full add of content length heuristically
-          diff.summary.additions = 1
-        } else {
-          const baseline = vault.readBlob(head.blobHash)
-          diff = await runDiffStrings(
-            baseline,
-            musicXml,
-            path.join(os.tmpdir(), 'allegrevcs-diff'),
-            app.getAppPath(),
+        try {
+          this.emitProgress('converting')
+          const { musicXml, workingHash } = await this.snapshotWorkingScore(
+            project.msczPath,
           )
-        }
 
-        return {
-          summary: diff.summary,
-          measures: diff.measures,
-          musicXml,
-          workingHash,
+          const head = vault.getHeadCommit(project.id)
+          let diff: DiffResult
+          if (!head) {
+            diff = {
+              summary: {
+                additions: 0,
+                deletions: 0,
+                changes: 0,
+              },
+              measures: [],
+            }
+            diff.summary.additions = 1
+          } else {
+            this.emitProgress('diffing')
+            const baseline = vault.readBlob(head.blobHash)
+            diff = await runDiffStrings(
+              baseline,
+              musicXml,
+              path.join(os.tmpdir(), 'allegrevcs-diff'),
+              app.getAppPath(),
+            )
+          }
+
+          return {
+            summary: diff.summary,
+            measures: diff.measures,
+            musicXml,
+            workingHash,
+          }
+        } finally {
+          this.emitProgress('idle')
         }
       },
     )
@@ -255,25 +328,45 @@ export class AllegreApp {
         const project = vault.getProject()
         if (!project) throw new Error('No project open')
 
-        const head = vault.getHeadCommit(project.id)
-        const commit = vault.createCommit({
-          projectId: project.id,
-          message: payload.message,
-          musicXml: payload.musicXml,
-          workingFileHash: payload.workingHash,
-          parentCommitId: head?.id ?? null,
-        })
+        try {
+          this.emitProgress('saving')
+          const head = vault.getHeadCommit(project.id)
+          const commit = vault.createCommit({
+            projectId: project.id,
+            message: payload.message,
+            musicXml: payload.musicXml,
+            workingFileHash: payload.workingHash,
+            parentCommitId: head?.id ?? null,
+          })
 
-        this.workingHash = payload.workingHash
-        this.emitStatus()
-        return commit
+          this.workingHash = payload.workingHash
+          this.emitStatus()
+          return commit
+        } finally {
+          this.emitProgress('idle')
+        }
       },
     )
 
+    ipcMain.handle(IpcChannels.getWorkingMusicXml, async () => {
+      const vault = this.vaultOrThrow()
+      const project = vault.getProject()
+      if (!project) throw new Error('No project open')
+      if (!fs.existsSync(project.msczPath)) {
+        throw new Error(`Score file not found: ${project.msczPath}`)
+      }
+      const { musicXml } = await this.snapshotWorkingScore(project.msczPath)
+      return musicXml
+    })
+
     ipcMain.handle(IpcChannels.getCommitMusicXml, (_e, commitId: string) => {
       const vault = this.vaultOrThrow()
+      const project = vault.getProject()
       const commit = vault.getCommit(commitId)
       if (!commit) throw new Error(`Unknown commit: ${commitId}`)
+      if (project && commit.projectId !== project.id) {
+        throw new Error('Commit does not belong to the active score')
+      }
       return vault.readBlob(commit.blobHash)
     })
 
@@ -281,9 +374,16 @@ export class AllegreApp {
       IpcChannels.diffCommits,
       async (_e, aId: string, bId: string): Promise<DiffResult> => {
         const vault = this.vaultOrThrow()
+        const project = vault.getProject()
         const a = vault.getCommit(aId)
         const b = vault.getCommit(bId)
         if (!a || !b) throw new Error('One or both commits not found')
+        if (
+          project &&
+          (a.projectId !== project.id || b.projectId !== project.id)
+        ) {
+          throw new Error('Commits do not belong to the active score')
+        }
         return runDiffStrings(
           vault.readBlob(a.blobHash),
           vault.readBlob(b.blobHash),
@@ -309,6 +409,9 @@ export class AllegreApp {
 
         const commit = vault.getCommit(options.commitId)
         if (!commit) throw new Error(`Unknown commit: ${options.commitId}`)
+        if (commit.projectId !== project.id) {
+          throw new Error('Commit does not belong to the active score')
+        }
 
         const musicXml = vault.readBlob(commit.blobHash)
         const tmpXml = path.join(

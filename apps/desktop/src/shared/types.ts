@@ -54,6 +54,17 @@ export interface CommitPreview {
   workingHash: string
 }
 
+export type CommitProgressStage =
+  | 'converting'
+  | 'diffing'
+  | 'saving'
+  | 'idle'
+
+export interface AppSettings {
+  museScorePath?: string
+  lastScorePath?: string
+}
+
 export interface CommitInput {
   message: string
 }

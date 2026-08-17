@@ -8,7 +8,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  mscz_path TEXT NOT NULL,
+  mscz_path TEXT NOT NULL UNIQUE,
   last_known_hash TEXT,
   created_at TEXT NOT NULL
 );
@@ -22,12 +22,41 @@ CREATE TABLE IF NOT EXISTS commits (
   parent_commit_id TEXT REFERENCES commits(id)
 );
 
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS commits_project_ts
   ON commits(project_id, timestamp);
+
+CREATE INDEX IF NOT EXISTS projects_path
+  ON projects(mscz_path);
 `
+
+function rowToProject(row: {
+  id: string
+  name: string
+  mscz_path: string
+  last_known_hash: string | null
+  created_at: string
+}): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    msczPath: row.mscz_path,
+    lastKnownHash: row.last_known_hash,
+    createdAt: row.created_at,
+  }
+}
 
 export function hashContent(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex')
+}
+
+/** Normalize score paths so the same file always maps to one project. */
+export function normalizeScorePath(scorePath: string): string {
+  return path.resolve(scorePath)
 }
 
 export class Vault {
@@ -41,19 +70,77 @@ export class Vault {
     fs.mkdirSync(this.blobsDir, { recursive: true })
     this.db = new Database(path.join(rootDir, 'vault.sqlite'))
     this.db.exec(SCHEMA)
+    this.migrateLegacySchema()
   }
 
   close(): void {
     this.db.close()
   }
 
-  getProject(): Project | null {
+  private migrateLegacySchema(): void {
+    // Older DBs may lack UNIQUE on mscz_path / meta table — SCHEMA IF NOT EXISTS
+    // already added meta. Deduplicate paths if any slipped in.
+    const dupes = this.db
+      .prepare(
+        `SELECT mscz_path, COUNT(*) AS c FROM projects
+         GROUP BY mscz_path HAVING c > 1`,
+      )
+      .all() as Array<{ mscz_path: string }>
+    for (const { mscz_path } of dupes) {
+      const rows = this.db
+        .prepare(
+          `SELECT id FROM projects WHERE mscz_path = ? ORDER BY created_at ASC`,
+        )
+        .all(mscz_path) as Array<{ id: string }>
+      // Keep oldest; drop extras that have no commits, else rename path suffix
+      for (const extra of rows.slice(1)) {
+        const commitCount = (
+          this.db
+            .prepare(`SELECT COUNT(*) AS n FROM commits WHERE project_id = ?`)
+            .get(extra.id) as { n: number }
+        ).n
+        if (commitCount === 0) {
+          this.db.prepare(`DELETE FROM projects WHERE id = ?`).run(extra.id)
+        } else {
+          this.db
+            .prepare(`UPDATE projects SET mscz_path = ? WHERE id = ?`)
+            .run(`${mscz_path}#${extra.id.slice(0, 8)}`, extra.id)
+        }
+      }
+    }
+  }
+
+  private getMeta(key: string): string | null {
+    const row = this.db
+      .prepare(`SELECT value FROM meta WHERE key = ?`)
+      .get(key) as { value: string } | undefined
+    return row?.value ?? null
+  }
+
+  private setMeta(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, value)
+  }
+
+  getActiveProjectId(): string | null {
+    return this.getMeta('active_project_id')
+  }
+
+  setActiveProjectId(projectId: string): void {
+    this.setMeta('active_project_id', projectId)
+  }
+
+  getProjectById(projectId: string): Project | null {
     const row = this.db
       .prepare(
         `SELECT id, name, mscz_path, last_known_hash, created_at
-         FROM projects LIMIT 1`,
+         FROM projects WHERE id = ?`,
       )
-      .get() as
+      .get(projectId) as
       | {
           id: string
           name: string
@@ -62,30 +149,59 @@ export class Vault {
           created_at: string
         }
       | undefined
-
-    if (!row) return null
-    return {
-      id: row.id,
-      name: row.name,
-      msczPath: row.mscz_path,
-      lastKnownHash: row.last_known_hash,
-      createdAt: row.created_at,
-    }
+    return row ? rowToProject(row) : null
   }
 
+  findProjectByPath(scorePath: string): Project | null {
+    const normalized = normalizeScorePath(scorePath)
+    const row = this.db
+      .prepare(
+        `SELECT id, name, mscz_path, last_known_hash, created_at
+         FROM projects WHERE mscz_path = ?`,
+      )
+      .get(normalized) as
+      | {
+          id: string
+          name: string
+          mscz_path: string
+          last_known_hash: string | null
+          created_at: string
+        }
+      | undefined
+    return row ? rowToProject(row) : null
+  }
+
+  /** Active project, if any. Never falls back to a different score's row. */
+  getProject(): Project | null {
+    const activeId = this.getActiveProjectId()
+    if (!activeId) return null
+    return this.getProjectById(activeId)
+  }
+
+  /**
+   * Open an existing project for this score path, or create a new one.
+   * Switching scores activates that project's own commit history.
+   */
   openOrCreateProject(msczPath: string, name?: string): Project {
-    const existing = this.getProject()
+    const normalized = normalizeScorePath(msczPath)
+    const displayName =
+      name ?? path.basename(normalized, path.extname(normalized))
+    const existing = this.findProjectByPath(normalized)
     if (existing) {
-      this.db
-        .prepare(`UPDATE projects SET mscz_path = ?, name = ? WHERE id = ?`)
-        .run(msczPath, name ?? existing.name, existing.id)
-      return this.getProject()!
+      this.setActiveProjectId(existing.id)
+      if (displayName !== existing.name) {
+        this.db
+          .prepare(`UPDATE projects SET name = ? WHERE id = ?`)
+          .run(displayName, existing.id)
+        return this.getProjectById(existing.id)!
+      }
+      return existing
     }
 
     const project: Project = {
       id: randomUUID(),
-      name: name ?? path.basename(msczPath, path.extname(msczPath)),
-      msczPath,
+      name: name ?? path.basename(normalized, path.extname(normalized)),
+      msczPath: normalized,
       lastKnownHash: null,
       createdAt: new Date().toISOString(),
     }
@@ -103,6 +219,7 @@ export class Vault {
         createdAt: project.createdAt,
       })
 
+    this.setActiveProjectId(project.id)
     return project
   }
 
