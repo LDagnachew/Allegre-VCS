@@ -25,15 +25,17 @@ const TONE_STROKE: Record<MeasureTone, string> = {
  * Classify a measure from its change types for tinting.
  */
 export function toneForChangeTypes(types: string[]): MeasureTone {
+  const hasNoteAdd = types.includes('note_added')
+  const hasNoteDel = types.includes('note_removed')
+  if (hasNoteAdd && hasNoteDel) return 'mixed'
+  if (hasNoteAdd) return 'added'
+  if (hasNoteDel) return 'removed'
+
   const hasAdd = types.some((t) => t.endsWith('_added'))
   const hasDel = types.some((t) => t.endsWith('_removed'))
-  const hasChange = types.some(
-    (t) => t.endsWith('_changed') || t.includes('articulation'),
-  )
   if (hasAdd && hasDel) return 'mixed'
-  if (hasAdd && !hasDel && !hasChange) return 'added'
-  if (hasDel && !hasAdd && !hasChange) return 'removed'
-  if (hasAdd || hasDel) return 'mixed'
+  if (hasAdd) return 'added'
+  if (hasDel) return 'removed'
   return 'changed'
 }
 

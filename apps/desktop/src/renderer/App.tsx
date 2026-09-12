@@ -5,7 +5,7 @@ import type {
   CommitProgressStage,
   DiffResult,
 } from '../shared/types'
-import { CommitPanel } from './components/CommitPanel'
+import { CommitPanel, type RestoreCommitRequest } from './components/CommitPanel'
 import { SettingsBar } from './components/SettingsBar'
 import {
   Timeline,
@@ -23,8 +23,10 @@ const emptyStatus: AppStatus = {
   project: null,
   commits: [],
   hasUncommittedChanges: false,
+  canCommit: false,
+  workingHash: null,
   museScorePath: null,
-  reminder: 'Save your score in MuseScore before committing.',
+  reminder: 'Open a score to start tracking versions.',
 }
 
 function scoreTitle(project: { name: string; msczPath: string } | null): string {
@@ -69,6 +71,9 @@ export function App() {
   const [scoreSource, setScoreSource] = useState<
     'preview' | 'commit' | 'working' | null
   >(null)
+  const [restoreCommitRequest, setRestoreCommitRequest] =
+    useState<RestoreCommitRequest | null>(null)
+  const [allowCommitAfterRestore, setAllowCommitAfterRestore] = useState(false)
   const activeScorePathRef = useRef<string | null>(null)
 
   const loadWorkingScore = useCallback(async () => {
@@ -94,6 +99,8 @@ export function App() {
     setFocusedMeasure(null)
     setError(null)
     setScoreSource(null)
+    setRestoreCommitRequest(null)
+    setAllowCommitAfterRestore(false)
   }, [])
 
   const timelineCommits = useMemo(() => {
@@ -290,6 +297,8 @@ export function App() {
         setWorkingMusicXml(preview.musicXml)
         setSelectedId(commit.id)
         setScoreSource('commit')
+        setAllowCommitAfterRestore(false)
+        setRestoreCommitRequest(null)
       } finally {
         setBusy(false)
       }
@@ -313,6 +322,11 @@ export function App() {
         await window.allegre.restoreCommit({ commitId: selectedId, mode })
         if (mode === 'overwrite') {
           await loadWorkingScore()
+          setPreviewMusicXml(null)
+          setPreviewDiff(null)
+          setCommitMusicXml(null)
+          setSelectedId(null)
+          setScoreSource('working')
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
@@ -322,6 +336,36 @@ export function App() {
     },
     [selectedId, loadWorkingScore],
   )
+
+  const restoreAndCommit = useCallback(async () => {
+    if (!selectedId) return
+    const commit = timelineCommits.find((c) => c.id === selectedId)
+    if (!commit) return
+
+    setBusy(true)
+    setError(null)
+    setAllowCommitAfterRestore(true)
+    try {
+      await window.allegre.restoreCommit({ commitId: selectedId, mode: 'overwrite' })
+      await loadWorkingScore()
+      setPreviewMusicXml(null)
+      setPreviewDiff(null)
+      setCommitMusicXml(null)
+      setSelectedId(null)
+      setFocusedMeasure(null)
+      setScoreSource('working')
+      setRestoreCommitRequest({
+        message: `Restored to: ${commit.message}`,
+        token: Date.now(),
+      })
+    } catch (err) {
+      setAllowCommitAfterRestore(false)
+      setRestoreCommitRequest(null)
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [selectedId, timelineCommits, loadWorkingScore])
 
   const enterCompare = useCallback(() => {
     const baseline = previousCommitId(timelineCommits, selectedId)
@@ -527,6 +571,14 @@ export function App() {
             <div className="restore-row">
               <button
                 type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void restoreAndCommit()}
+              >
+                Restore &amp; commit…
+              </button>
+              <button
+                type="button"
                 className="btn"
                 disabled={busy}
                 onClick={() => void restore('export')}
@@ -539,7 +591,7 @@ export function App() {
                 disabled={busy}
                 onClick={() => void restore('overwrite')}
               >
-                Restore over working file
+                Restore without committing
               </button>
             </div>
           )}
@@ -548,11 +600,15 @@ export function App() {
         <aside className="panel panel-commit">
           <h2 className="panel-title">Commit</h2>
           <CommitPanel
-            canCommit={Boolean(status.project && status.hasUncommittedChanges)}
+            canCommit={Boolean(status.canCommit || allowCommitAfterRestore)}
             reminder={status.reminder}
             busy={busy}
             progress={progress}
             focusedMeasure={focusedMeasure}
+            workingHash={status.workingHash}
+            restoreCommitRequest={restoreCommitRequest}
+            onRestoreCommitRequestConsumed={() => setRestoreCommitRequest(null)}
+            onRestoreCommitFailed={() => setAllowCommitAfterRestore(false)}
             onPreview={onPreview}
             onConfirm={onConfirm}
             onPreviewDiffChange={onPreviewDiffChange}

@@ -124,9 +124,11 @@ npm run dev
 
 Last opened score is restored on launch.
 
+### Packaging (macOS)
+
 ```bash
 cd apps/desktop
 npm run dist:mac
 ```
 
-Installer: `apps/desktop/release/*.dmg`
+This bundles the Python diff engine via PyInstaller, then builds a `.dmg` in `apps/desktop/release/`. End users need MuseScore installed; they do not need Python or this repo checkout.

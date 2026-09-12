@@ -27,16 +27,24 @@ The last opened score is restored on launch. If MuseScore isn’t auto-detected,
 2. Edit & save in MuseScore (watcher detects hash change)
 3. **Preview diff** (shows conversion progress) → optional message → **Commit**
 4. Browse **Timeline**, compare two commits, render via Verovio (changed measures highlight on the score)
-5. **Restore** overwrite or export
+5. **Restore & commit…** — roll back the working file and record it in history, or **Restore without committing** / **Export this version…**
 
 MuseScore 4 on macOS is auto-detected at  
 `/Applications/MuseScore 4.app/Contents/MacOS/mscore`.
 
 ## Installer (macOS)
 
+Builds the diff engine into a standalone binary, then packages the Electron app:
+
 ```bash
 cd apps/desktop
 npm run dist:mac
 ```
 
-The `.dmg` lands in `apps/desktop/release/`. The packaged app still uses the repo’s Python diff engine (`packages/diff-engine/.venv`) when you run from this checkout; a fully self-contained Python bundle is later work.
+The `.dmg` lands in `apps/desktop/release/`. The packaged app includes the bundled diff engine — no Python install or repo checkout required on the target machine. MuseScore must still be installed separately for `.mscz` conversion.
+
+To rebuild only the diff engine binary:
+
+```bash
+npm run bundle:diff-engine
+```

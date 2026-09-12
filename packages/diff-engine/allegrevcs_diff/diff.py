@@ -15,6 +15,7 @@ from allegrevcs_diff.models import (
     MeasureSnapshot,
     NoteEvent,
     ScoreSnapshot,
+    quantize_time,
 )
 from allegrevcs_diff.parser import parse_score
 
@@ -76,53 +77,97 @@ def _diff_measure(
 def _diff_notes(
     baseline: list[NoteEvent], modified: list[NoteEvent]
 ) -> Iterable[MeasureChange]:
-    """Pair notes by identity key; report adds/removes/changes (articulations)."""
-    base_by_key: dict[tuple, list[NoteEvent]] = {}
-    for n in baseline:
-        base_by_key.setdefault(n.identity_key(), []).append(n)
+    """Diff pitched notes. Rests are ignored — they refill when notes are added
+    or removed, and MuseScore rest notation is unstable across exports.
 
-    mod_by_key: dict[tuple, list[NoteEvent]] = {}
-    for n in modified:
-        mod_by_key.setdefault(n.identity_key(), []).append(n)
+    Pairing:
+    1. Same offset + pitch → same note (articulation/duration/tie may change)
+    2. Same offset, different pitch → note_changed (substitution)
+    3. Leftovers → note_added / note_removed
+    """
+    base_notes = [_normalize_note(n) for n in baseline if not n.is_rest]
+    mod_notes = [_normalize_note(n) for n in modified if not n.is_rest]
 
-    all_keys = sorted(
-        set(base_by_key) | set(mod_by_key),
-        key=lambda k: tuple("" if x is None else x for x in k),
+    used_base = [False] * len(base_notes)
+    used_mod = [False] * len(mod_notes)
+
+    # Pass 1: exact (offset, pitch) matches.
+    for i, b in enumerate(base_notes):
+        for j, m in enumerate(mod_notes):
+            if used_mod[j]:
+                continue
+            if b.offset == m.offset and b.pitch == m.pitch:
+                used_base[i] = True
+                used_mod[j] = True
+                yield from _note_attribute_changes(b, m)
+                break
+
+    # Pass 2: leftover notes on the same beat are a substitution, not mixed add+remove.
+    for i, b in enumerate(base_notes):
+        if used_base[i]:
+            continue
+        for j, m in enumerate(mod_notes):
+            if used_mod[j]:
+                continue
+            if b.offset == m.offset:
+                used_base[i] = True
+                used_mod[j] = True
+                yield MeasureChange(
+                    type="note_changed",
+                    detail={"before": b.to_dict(), "after": m.to_dict()},
+                )
+                break
+
+    for j, m in enumerate(mod_notes):
+        if not used_mod[j]:
+            yield MeasureChange(type="note_added", detail={"note": m.to_dict()})
+    for i, b in enumerate(base_notes):
+        if not used_base[i]:
+            yield MeasureChange(type="note_removed", detail={"note": b.to_dict()})
+
+
+def _normalize_note(note: NoteEvent) -> NoteEvent:
+    return NoteEvent(
+        offset=quantize_time(note.offset),
+        pitch=note.pitch,
+        duration=quantize_time(note.duration),
+        is_rest=note.is_rest,
+        articulations=note.articulations,
+        tie=note.tie,
     )
-    for key in all_keys:
-        base_list = list(base_by_key.get(key, []))
-        mod_list = list(mod_by_key.get(key, []))
 
-        # Pair by occurrence count at the same identity.
-        paired = min(len(base_list), len(mod_list))
-        for i in range(paired):
-            b, m = base_list[i], mod_list[i]
-            if b.articulations != m.articulations:
-                added = sorted(set(m.articulations) - set(b.articulations))
-                removed = sorted(set(b.articulations) - set(m.articulations))
-                if added:
-                    yield MeasureChange(
-                        type="articulation_added",
-                        detail={"note": m.to_dict(), "articulations": added},
-                    )
-                if removed:
-                    yield MeasureChange(
-                        type="articulation_removed",
-                        detail={"note": b.to_dict(), "articulations": removed},
-                    )
 
-        for n in mod_list[paired:]:
-            yield MeasureChange(type="note_added", detail={"note": n.to_dict()})
-        for n in base_list[paired:]:
-            yield MeasureChange(type="note_removed", detail={"note": n.to_dict()})
+def _note_attribute_changes(
+    baseline: NoteEvent, modified: NoteEvent
+) -> Iterable[MeasureChange]:
+    if baseline.articulations != modified.articulations:
+        added = sorted(set(modified.articulations) - set(baseline.articulations))
+        removed = sorted(set(baseline.articulations) - set(modified.articulations))
+        if added:
+            yield MeasureChange(
+                type="articulation_added",
+                detail={"note": modified.to_dict(), "articulations": added},
+            )
+        if removed:
+            yield MeasureChange(
+                type="articulation_removed",
+                detail={"note": baseline.to_dict(), "articulations": removed},
+            )
+    if baseline.duration != modified.duration or baseline.tie != modified.tie:
+        yield MeasureChange(
+            type="note_changed",
+            detail={"before": baseline.to_dict(), "after": modified.to_dict()},
+        )
 
 
 def _diff_dynamics(
     baseline: list[DynamicEvent], modified: list[DynamicEvent]
 ) -> Iterable[MeasureChange]:
     """Multiset diff on (offset, mark); same-offset different mark → changed."""
-    base_counter = Counter((d.offset, d.mark) for d in baseline)
-    mod_counter = Counter((d.offset, d.mark) for d in modified)
+    base_counter = Counter(
+        (quantize_time(d.offset), d.mark) for d in baseline
+    )
+    mod_counter = Counter((quantize_time(d.offset), d.mark) for d in modified)
 
     base_only = base_counter - mod_counter
     mod_only = mod_counter - base_counter

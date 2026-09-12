@@ -12,6 +12,7 @@ from allegrevcs_diff.models import (
     MeasureSnapshot,
     NoteEvent,
     ScoreSnapshot,
+    quantize_time,
 )
 
 
@@ -46,7 +47,10 @@ def score_to_snapshot(score: stream.Stream) -> ScoreSnapshot:
 
             for dyn in measure.recurse().getElementsByClass(dynamics.Dynamic):
                 snap.dynamics.append(
-                    DynamicEvent(offset=float(dyn.offset), mark=str(dyn.value))
+                    DynamicEvent(
+                        offset=quantize_time(float(dyn.offset)),
+                        mark=str(dyn.value),
+                    )
                 )
 
             snap.notes.sort(key=lambda n: (n.offset, n.pitch or "", n.duration))
@@ -103,9 +107,9 @@ def _note_event(el: note.GeneralNote) -> NoteEvent:
         tie_type = str(tie.type)
 
     return NoteEvent(
-        offset=float(el.offset),
+        offset=quantize_time(float(el.offset)),
         pitch=pitch,
-        duration=float(el.quarterLength),
+        duration=quantize_time(float(el.quarterLength)),
         is_rest=is_rest,
         articulations=articulations,
         tie=tie_type,

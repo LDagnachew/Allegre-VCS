@@ -12,9 +12,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac dmg"
+    "bundle:diff-engine": "bash ../../packages/diff-engine/scripts/build-bundle.sh",
+    "pack": "npm run bundle:diff-engine && npm run build && electron-builder --dir",
+    "dist": "npm run bundle:diff-engine && npm run build && electron-builder",
+    "dist:mac": "npm run bundle:diff-engine && npm run build && electron-builder --mac dmg"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
@@ -44,6 +45,13 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/diff-engine",
+        "to": "diff-engine",
+        "filter": ["**/*"]
+      }
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**/*"

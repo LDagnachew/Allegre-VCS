@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   CommitPreview,
   CommitProgressStage,
@@ -12,12 +12,21 @@ const PROGRESS_COPY: Record<Exclude<CommitProgressStage, 'idle'>, string> = {
   saving: 'Saving snapshot…',
 }
 
+export interface RestoreCommitRequest {
+  message: string
+  token: number
+}
+
 interface CommitPanelProps {
   canCommit: boolean
   reminder: string
   busy: boolean
   progress: CommitProgressStage
   focusedMeasure: number | null
+  workingHash: string | null
+  restoreCommitRequest: RestoreCommitRequest | null
+  onRestoreCommitRequestConsumed: () => void
+  onRestoreCommitFailed: () => void
   onPreview: () => Promise<CommitPreview>
   onConfirm: (message: string, preview: CommitPreview) => Promise<void>
   onPreviewDiffChange: (diff: DiffResult | null) => void
@@ -30,6 +39,10 @@ export function CommitPanel({
   busy,
   progress,
   focusedMeasure,
+  workingHash,
+  restoreCommitRequest,
+  onRestoreCommitRequestConsumed,
+  onRestoreCommitFailed,
   onPreview,
   onConfirm,
   onPreviewDiffChange,
@@ -38,6 +51,7 @@ export function CommitPanel({
   const [message, setMessage] = useState('')
   const [preview, setPreview] = useState<CommitPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const handledRestoreTokenRef = useRef<number | null>(null)
 
   async function handlePreview(): Promise<void> {
     setError(null)
@@ -53,6 +67,37 @@ export function CommitPanel({
     }
   }
 
+  useEffect(() => {
+    if (!restoreCommitRequest || !canCommit) return
+    if (handledRestoreTokenRef.current === restoreCommitRequest.token) return
+    handledRestoreTokenRef.current = restoreCommitRequest.token
+
+    setMessage(restoreCommitRequest.message)
+    setError(null)
+    void (async () => {
+      try {
+        const next = await onPreview()
+        setPreview(next)
+        onPreviewDiffChange({
+          summary: next.summary,
+          measures: next.measures,
+        })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+        onRestoreCommitFailed()
+      } finally {
+        onRestoreCommitRequestConsumed()
+      }
+    })()
+  }, [
+    restoreCommitRequest,
+    canCommit,
+    onPreview,
+    onPreviewDiffChange,
+    onRestoreCommitRequestConsumed,
+    onRestoreCommitFailed,
+  ])
+
   async function handleConfirm(): Promise<void> {
     if (!preview) return
     setError(null)
@@ -66,13 +111,36 @@ export function CommitPanel({
     }
   }
 
+  useEffect(() => {
+    if (!preview) return
+    const fileChangedSincePreview =
+      workingHash != null && preview.workingHash !== workingHash
+    const undoneToClean = !canCommit && !restoreCommitRequest
+    if (!fileChangedSincePreview && !undoneToClean) return
+    setPreview(null)
+    onPreviewDiffChange(null)
+  }, [
+    preview,
+    workingHash,
+    canCommit,
+    restoreCommitRequest,
+    onPreviewDiffChange,
+  ])
+
   const stageCopy =
     progress !== 'idle' ? PROGRESS_COPY[progress] : busy ? 'Working…' : null
   const firstSnapshot =
     preview &&
     preview.measures.length === 0 &&
-    preview.summary.additions <= 1 &&
-    preview.summary.deletions === 0
+    preview.summary.additions === 1 &&
+    preview.summary.deletions === 0 &&
+    preview.summary.changes === 0
+  const canConfirm = Boolean(
+    preview &&
+      canCommit &&
+      !busy &&
+      (firstSnapshot || preview.measures.length > 0),
+  )
 
   return (
     <div className="commit-panel">
@@ -114,7 +182,7 @@ export function CommitPanel({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={!preview || busy}
+          disabled={!canConfirm}
           onClick={() => void handleConfirm()}
         >
           Commit
@@ -123,7 +191,7 @@ export function CommitPanel({
 
       {error && <div className="error-banner">{error}</div>}
 
-      {preview && (
+      {preview && canCommit && (firstSnapshot || preview.measures.length > 0) && (
         <div className="commit-ready">
           <h3 className="panel-title" style={{ marginBottom: '0.35rem' }}>
             Ready to commit

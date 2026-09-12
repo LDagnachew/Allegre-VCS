@@ -4,12 +4,13 @@ import path from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { IpcChannels } from '../shared/ipc'
 import {
-  REMINDER,
+  REMINDER_SAVE_IN_MUSESCORE,
   type AppSettings,
   type AppStatus,
   type CommitPreview,
   type CommitProgressStage,
   type DiffResult,
+  type Project,
 } from '../shared/types'
 import {
   locateMuseScore,
@@ -109,41 +110,108 @@ export class AllegreApp {
     })
   }
 
+  private getActiveProject(): Project | null {
+    if (!this.vault) return null
+    if (this.currentProjectId) {
+      const byId = this.vault.getProjectById(this.currentProjectId)
+      if (byId) return byId
+    }
+    const fromMeta = this.vault.getProject()
+    if (fromMeta) {
+      this.currentProjectId = fromMeta.id
+    }
+    return fromMeta
+  }
+
+  private scoreNeedsMuseScore(project: Project): boolean {
+    const ext = path.extname(project.msczPath).toLowerCase()
+    return ext === '.mscz' || ext === '.mscx'
+  }
+
+  private resolveWorkingHash(project: Project | null): string | null {
+    if (!project || !fs.existsSync(project.msczPath)) return null
+    if (this.workingHash) return this.workingHash
+    try {
+      return hashFile(project.msczPath)
+    } catch {
+      return null
+    }
+  }
+
+  private buildCommitReminder(input: {
+    project: Project | null
+    commits: AppStatus['commits']
+    canCommit: boolean
+    hasUncommittedChanges: boolean
+  }): string {
+    const { project, commits, canCommit, hasUncommittedChanges } = input
+    if (!project) {
+      return 'Open a score to start tracking versions.'
+    }
+    if (this.scoreNeedsMuseScore(project) && !this.museScorePath) {
+      return 'Locate MuseScore in the top bar before committing .mscz files.'
+    }
+    if (canCommit && commits.length === 0) {
+      return 'No commits yet — preview your score, add a message, then commit.'
+    }
+    if (canCommit) {
+      return 'Preview the diff, add a message, then commit.'
+    }
+    if (!hasUncommittedChanges && commits.length > 0) {
+      return REMINDER_SAVE_IN_MUSESCORE
+    }
+    if (!fs.existsSync(project.msczPath)) {
+      return 'Score file not found at the saved path. Open the score again.'
+    }
+    return 'Waiting for changes to the score file.'
+  }
+
   getStatus(): AppStatus {
     if (!this.vault) {
       return {
         project: null,
         commits: [],
         hasUncommittedChanges: false,
+        canCommit: false,
+        workingHash: null,
         museScorePath: this.museScorePath,
-        reminder: REMINDER,
+        reminder: 'Open a score to start tracking versions.',
       }
     }
 
     const vault = this.vault
-    const project = this.currentProjectId
-      ? vault.getProjectById(this.currentProjectId)
-      : vault.getProject()
+    const project = this.getActiveProject()
     const commits = project ? vault.listCommits(project.id) : []
-    const currentHash =
-      this.workingHash ??
-      (project && fs.existsSync(project.msczPath)
-        ? hashFile(project.msczPath)
-        : null)
+    const head = project ? vault.getHeadCommit(project.id) : null
+    const currentHash = this.resolveWorkingHash(project)
+    const museScoreReady =
+      !project || !this.scoreNeedsMuseScore(project) || Boolean(this.museScorePath)
 
     const hasUncommittedChanges = Boolean(
       project &&
         currentHash &&
-        (project.lastKnownHash === null ||
+        (!head ||
+          project.lastKnownHash === null ||
           currentHash !== project.lastKnownHash),
     )
+
+    const canCommit = Boolean(project && currentHash && museScoreReady && hasUncommittedChanges)
+
+    const reminder = this.buildCommitReminder({
+      project,
+      commits,
+      canCommit,
+      hasUncommittedChanges,
+    })
 
     return {
       project,
       commits,
       hasUncommittedChanges,
+      canCommit,
+      workingHash: currentHash,
       museScorePath: this.museScorePath,
-      reminder: REMINDER,
+      reminder,
     }
   }
 
@@ -274,7 +342,7 @@ export class AllegreApp {
       IpcChannels.previewCommit,
       async (): Promise<CommitPreview> => {
         const vault = this.vaultOrThrow()
-        const project = vault.getProject()
+        const project = this.getActiveProject()
         if (!project) throw new Error('No project open')
 
         try {
@@ -325,7 +393,7 @@ export class AllegreApp {
         payload: { message: string; musicXml: string; workingHash: string },
       ) => {
         const vault = this.vaultOrThrow()
-        const project = vault.getProject()
+        const project = this.getActiveProject()
         if (!project) throw new Error('No project open')
 
         try {
@@ -350,7 +418,7 @@ export class AllegreApp {
 
     ipcMain.handle(IpcChannels.getWorkingMusicXml, async () => {
       const vault = this.vaultOrThrow()
-      const project = vault.getProject()
+      const project = this.getActiveProject()
       if (!project) throw new Error('No project open')
       if (!fs.existsSync(project.msczPath)) {
         throw new Error(`Score file not found: ${project.msczPath}`)
@@ -361,7 +429,7 @@ export class AllegreApp {
 
     ipcMain.handle(IpcChannels.getCommitMusicXml, (_e, commitId: string) => {
       const vault = this.vaultOrThrow()
-      const project = vault.getProject()
+      const project = this.getActiveProject()
       const commit = vault.getCommit(commitId)
       if (!commit) throw new Error(`Unknown commit: ${commitId}`)
       if (project && commit.projectId !== project.id) {
@@ -374,7 +442,7 @@ export class AllegreApp {
       IpcChannels.diffCommits,
       async (_e, aId: string, bId: string): Promise<DiffResult> => {
         const vault = this.vaultOrThrow()
-        const project = vault.getProject()
+        const project = this.getActiveProject()
         const a = vault.getCommit(aId)
         const b = vault.getCommit(bId)
         if (!a || !b) throw new Error('One or both commits not found')
@@ -404,7 +472,7 @@ export class AllegreApp {
         },
       ) => {
         const vault = this.vaultOrThrow()
-        const project = vault.getProject()
+        const project = this.getActiveProject()
         if (!project) throw new Error('No project open')
 
         const commit = vault.getCommit(options.commitId)

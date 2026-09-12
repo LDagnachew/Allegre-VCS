@@ -5,6 +5,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+# 48 steps per quarter supports 8th-note triplets and 16ths without float noise
+# from MuseScore MusicXML round-trips.
+TIME_STEPS = 48
+
+
+def quantize_time(value: float) -> float:
+    """Snap offsets/durations so tiny export jitter does not look like a change."""
+    return round(float(value) * TIME_STEPS) / TIME_STEPS
+
 
 ChangeType = Literal[
     "note_added",
@@ -30,8 +39,8 @@ class NoteEvent:
     tie: str | None = None  # "start" | "stop" | "continue" | None
 
     def identity_key(self) -> tuple[Any, ...]:
-        """Key used to pair notes across versions (ignores articulations)."""
-        return (self.offset, self.pitch, self.duration, self.is_rest, self.tie)
+        """Key used to pair the same sounding note (ignores articulations/duration/tie)."""
+        return (quantize_time(self.offset), self.pitch, self.is_rest)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

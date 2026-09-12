@@ -20,3 +20,13 @@ python3 -m venv .venv
 ```bash
 .venv/bin/pytest
 ```
+
+## Bundle for desktop app
+
+Build a standalone binary (PyInstaller) copied into `apps/desktop/resources/diff-engine/`:
+
+```bash
+bash scripts/build-bundle.sh
+```
+
+This runs automatically before `npm run dist` in the desktop app.

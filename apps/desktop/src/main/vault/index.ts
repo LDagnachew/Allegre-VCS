@@ -45,7 +45,7 @@ function rowToProject(row: {
     id: row.id,
     name: row.name,
     msczPath: row.mscz_path,
-    lastKnownHash: row.last_known_hash,
+    lastKnownHash: row.last_known_hash || null,
     createdAt: row.created_at,
   }
 }

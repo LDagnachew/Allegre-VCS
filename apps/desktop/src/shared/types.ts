@@ -42,7 +42,12 @@ export interface DiffResult {
 export interface AppStatus {
   project: Project | null
   commits: Commit[]
+  /** File hash differs from last commit (or no baseline yet). */
   hasUncommittedChanges: boolean
+  /** Preview/commit is allowed for the active score. */
+  canCommit: boolean
+  /** Current working-file hash, used to invalidate stale commit previews. */
+  workingHash: string | null
   museScorePath: string | null
   reminder: string
 }
@@ -75,5 +80,5 @@ export interface RestoreOptions {
   exportPath?: string
 }
 
-export const REMINDER =
-  'Save your score in MuseScore before committing.'
+export const REMINDER_SAVE_IN_MUSESCORE =
+  'Save your score in MuseScore, then preview the diff here.'
