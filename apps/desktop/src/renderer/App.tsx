@@ -13,6 +13,7 @@ import {
   type CompareSlot,
 } from './components/Timeline'
 import { DiffView } from './components/DiffView'
+import { WelcomeScreen } from './components/WelcomeScreen'
 import { ScoreView } from './verovio/ScoreView'
 import {
   toneForChangeTypes,
@@ -547,6 +548,20 @@ export function App() {
     timelineCommits,
   ])
 
+  const pickMuseScore = useCallback(() => {
+    void (async () => {
+      setBusy(true)
+      setError(null)
+      try {
+        await window.allegre.pickMuseScore()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setBusy(false)
+      }
+    })()
+  }, [])
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -583,18 +598,7 @@ export function App() {
           <SettingsBar
             museScorePath={status.museScorePath}
             busy={busy}
-            onPickMuseScore={() => {
-              void (async () => {
-                setBusy(true)
-                try {
-                  await window.allegre.pickMuseScore()
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : String(err))
-                } finally {
-                  setBusy(false)
-                }
-              })()
-            }}
+            onPickMuseScore={pickMuseScore}
           />
           <button
             type="button"
@@ -607,22 +611,33 @@ export function App() {
         </div>
       </header>
 
+      {error && !status.project && (
+        <div className="error-banner welcome-error">{error}</div>
+      )}
+
+      {!status.project ? (
+        <WelcomeScreen
+          appVersion={status.appVersion}
+          museScorePath={status.museScorePath}
+          busy={busy}
+          onOpenScore={() => void openProject()}
+          onPickMuseScore={pickMuseScore}
+        />
+      ) : (
       <div className="workspace">
         <aside className="panel panel-timeline">
           <h2 className="panel-title">Timeline</h2>
           <p className="muted" style={{ fontSize: '0.8rem', marginTop: 0 }}>
-            {status.project?.msczPath
-              ? status.project.msczPath.split(/[/\\]/).pop()
-              : 'No score open'}
+            {status.project.msczPath.split(/[/\\]/).pop()}
           </p>
           <Timeline
-            key={status.project?.msczPath ?? 'no-project'}
+            key={status.project.msczPath}
             commits={timelineCommits}
             selectedId={selectedId}
             compareMode={compareMode}
             fromId={fromId}
             picking={picking}
-            hasOpenScore={Boolean(status.project)}
+            hasOpenScore
             onSelectWorking={() => {
               setPreviewMusicXml(null)
               setPreviewDiff(null)
@@ -687,23 +702,7 @@ export function App() {
             </div>
           )}
           {error && <div className="error-banner">{error}</div>}
-          {!status.project ? (
-            <div className="empty-state">
-              <strong>Open a MuseScore file to begin</strong>
-              <p className="muted" style={{ margin: '0.45rem 0 0.85rem' }}>
-                AllegreVCS watches your score, diffs versions, and keeps a local
-                timeline — MuseScore stays your editor.
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() => void openProject()}
-              >
-                Open score…
-              </button>
-            </div>
-          ) : selectedIsForActiveScore && !commitMusicXml && !previewMusicXml ? (
+          {selectedIsForActiveScore && !commitMusicXml && !previewMusicXml ? (
             <div className="empty-state muted">Loading this version…</div>
           ) : !displayMusicXml ? (
             <div className="empty-state muted">
@@ -713,7 +712,7 @@ export function App() {
             </div>
           ) : (
             <ScoreView
-              key={`${status.project?.msczPath ?? 'none'}:${selectedId ?? 'working'}`}
+              key={`${status.project.msczPath}:${selectedId ?? 'working'}`}
               musicXml={displayMusicXml}
               highlights={highlights}
               focusedMeasure={focusedMeasure}
@@ -792,13 +791,14 @@ export function App() {
           />
         </aside>
       </div>
+      )}
 
       <footer className="app-footer muted">
         <span>
           AllegreVCS v{status.appVersion} · local MuseScore history (alpha)
         </span>
         <span className="footer-hints">
-          ← → scrub · Esc exits compare
+          {status.project ? '← → scrub · Esc exits compare' : 'Open a score to begin'}
         </span>
       </footer>
     </div>

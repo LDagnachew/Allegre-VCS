@@ -7,6 +7,9 @@ export interface MeasureHighlight {
   tone?: MeasureTone
 }
 
+/** measure number → Verovio measure groups (may span systems/pages) */
+export type MeasureIndex = Map<number, SVGGElement[]>
+
 const TONE_FILL: Record<MeasureTone, string> = {
   changed: 'rgba(120, 56, 32, 0.16)',
   added: 'rgba(61, 107, 69, 0.18)',
@@ -56,14 +59,12 @@ function measureNumberFromElement(
     }
   }
 
-  // Fallback: mNum text inside the measure group
   const mNum = el.querySelector('.mNum, text.mNum')
   if (mNum?.textContent) {
     const n = Number(mNum.textContent.trim())
     if (Number.isFinite(n)) return n
   }
 
-  // Last resort: parse ids like measure-12 / measure-00000012
   if (id) {
     const match = id.match(/measure[_-]?0*(\d+)/i)
     if (match) return Number(match[1])
@@ -73,61 +74,83 @@ function measureNumberFromElement(
 }
 
 /**
+ * Resolve measure numbers once after SVG is in the DOM so highlight updates
+ * stay O(changed measures) instead of scanning every `g.measure` via WASM.
+ */
+export function buildMeasureIndex(
+  host: HTMLElement,
+  tk: VerovioToolkit,
+): MeasureIndex {
+  const index: MeasureIndex = new Map()
+  const measureEls = host.querySelectorAll('g.measure')
+  measureEls.forEach((el) => {
+    const num = measureNumberFromElement(tk, el)
+    if (num === null) return
+    const list = index.get(num)
+    if (list) list.push(el as SVGGElement)
+    else index.set(num, [el as SVGGElement])
+  })
+  return index
+}
+
+function clearHighlights(host: HTMLElement): void {
+  host.querySelectorAll('.allegre-measure-hl').forEach((n) => n.remove())
+  host
+    .querySelectorAll('.allegre-measure-focused')
+    .forEach((n) => n.classList.remove('allegre-measure-focused'))
+}
+
+/**
  * Draw translucent highlight rects behind changed measures in rendered Verovio SVG.
  */
 export function applyMeasureHighlights(
   host: HTMLElement,
-  tk: VerovioToolkit,
+  index: MeasureIndex,
   highlights: MeasureHighlight[],
   focusedMeasure?: number | null,
 ): void {
-  host.querySelectorAll('.allegre-measure-hl').forEach((n) => n.remove())
+  clearHighlights(host)
 
   if (highlights.length === 0) return
 
-  const byNumber = new Map(
-    highlights.map((h) => [h.number, h.tone ?? 'changed'] as const),
-  )
+  const ns = 'http://www.w3.org/2000/svg'
 
-  const measureEls = host.querySelectorAll('g.measure')
-  measureEls.forEach((el) => {
-    const num = measureNumberFromElement(tk, el)
-    if (num === null || !byNumber.has(num)) return
+  for (const h of highlights) {
+    const els = index.get(h.number)
+    if (!els?.length) continue
+    const tone = h.tone ?? 'changed'
 
-    const tone = byNumber.get(num)!
-    const svgEl = el as SVGGElement
-    let bbox: DOMRect
-    try {
-      bbox = svgEl.getBBox()
-    } catch {
-      return
+    for (const el of els) {
+      let bbox: DOMRect
+      try {
+        bbox = el.getBBox()
+      } catch {
+        continue
+      }
+      if (!bbox.width || !bbox.height) continue
+
+      const rect = document.createElementNS(ns, 'rect')
+      rect.setAttribute('class', 'allegre-measure-hl')
+      rect.setAttribute('x', String(bbox.x - 4))
+      rect.setAttribute('y', String(bbox.y - 4))
+      rect.setAttribute('width', String(bbox.width + 8))
+      rect.setAttribute('height', String(bbox.height + 8))
+      rect.setAttribute('rx', '6')
+      rect.setAttribute('fill', TONE_FILL[tone])
+      rect.setAttribute('stroke', TONE_STROKE[tone])
+      rect.setAttribute(
+        'stroke-width',
+        focusedMeasure === h.number ? '2.5' : '1.25',
+      )
+      rect.setAttribute('pointer-events', 'none')
+      rect.dataset.measure = String(h.number)
+      el.insertBefore(rect, el.firstChild)
+
+      if (focusedMeasure === h.number) {
+        el.classList.add('allegre-measure-focused')
+      }
     }
-    if (!bbox.width || !bbox.height) return
-
-    const ns = 'http://www.w3.org/2000/svg'
-    const rect = document.createElementNS(ns, 'rect')
-    rect.setAttribute('class', 'allegre-measure-hl')
-    rect.setAttribute('x', String(bbox.x - 4))
-    rect.setAttribute('y', String(bbox.y - 4))
-    rect.setAttribute('width', String(bbox.width + 8))
-    rect.setAttribute('height', String(bbox.height + 8))
-    rect.setAttribute('rx', '6')
-    rect.setAttribute('fill', TONE_FILL[tone])
-    rect.setAttribute('stroke', TONE_STROKE[tone])
-    rect.setAttribute(
-      'stroke-width',
-      focusedMeasure === num ? '2.5' : '1.25',
-    )
-    rect.setAttribute('pointer-events', 'none')
-    rect.dataset.measure = String(num)
-
-    // Insert behind staff content so notes stay readable
-    el.insertBefore(rect, el.firstChild)
-
-    if (focusedMeasure === num) {
-      el.classList.add('allegre-measure-focused')
-    }
-  })
+  }
 }
 
 export function scrollToMeasure(
