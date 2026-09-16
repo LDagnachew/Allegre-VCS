@@ -167,6 +167,9 @@ export class AllegreApp {
   }
 
   getStatus(): AppStatus {
+    const appVersion = app.getVersion()
+    const dismissedTips = this.loadSettings().dismissedTips ?? []
+
     if (!this.vault) {
       return {
         project: null,
@@ -176,6 +179,8 @@ export class AllegreApp {
         workingHash: null,
         museScorePath: this.museScorePath,
         reminder: 'Open a score to start tracking versions.',
+        appVersion,
+        dismissedTips,
       }
     }
 
@@ -212,6 +217,8 @@ export class AllegreApp {
       workingHash: currentHash,
       museScorePath: this.museScorePath,
       reminder,
+      appVersion,
+      dismissedTips,
     }
   }
 
@@ -517,6 +524,18 @@ export class AllegreApp {
         }
 
         // overwrite working file
+        const confirm = await dialog.showMessageBox({
+          type: 'warning',
+          buttons: ['Cancel', 'Overwrite working file'],
+          defaultId: 0,
+          cancelId: 0,
+          title: 'Restore this version?',
+          message: `Replace the score on disk with “${commit.message}”?`,
+          detail:
+            'Restore goes through MusicXML. Notes and markings are preserved, but MuseScore layout/style tweaks may look different from the original .mscz. Prefer Export if you want a safe copy.',
+        })
+        if (confirm.response !== 1) return null
+
         if (isNative) {
           if (!this.museScorePath) {
             throw new Error('MuseScore CLI required to restore .mscz')
@@ -536,5 +555,46 @@ export class AllegreApp {
         return project.msczPath
       },
     )
+
+    ipcMain.handle(IpcChannels.clearHistory, async () => {
+      const vault = this.vaultOrThrow()
+      const project = this.getActiveProject()
+      if (!project) throw new Error('No project open')
+
+      const commits = vault.listCommits(project.id)
+      if (commits.length === 0) {
+        return { deletedCommits: 0 }
+      }
+
+      const result = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['Cancel', 'Clear history'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Clear version history?',
+        message: `Delete all ${commits.length} commit${commits.length === 1 ? '' : 's'} for “${project.name}”?`,
+        detail:
+          'This only clears AllegreVCS history. Your MuseScore file on disk is not changed. This cannot be undone.',
+      })
+      if (result.response !== 1) return null
+
+      const cleared = vault.clearProjectHistory(project.id)
+      this.workingHash = fs.existsSync(project.msczPath)
+        ? hashFile(project.msczPath)
+        : null
+      this.emitStatus()
+      return cleared
+    })
+
+    ipcMain.handle(IpcChannels.dismissTip, (_e, tipId: string) => {
+      const id = String(tipId || '').trim()
+      if (!id) return this.getStatus()
+      const current = this.loadSettings().dismissedTips ?? []
+      if (!current.includes(id)) {
+        this.saveSettings({ dismissedTips: [...current, id] })
+      }
+      this.emitStatus()
+      return this.getStatus()
+    })
   }
 }

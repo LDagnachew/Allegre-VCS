@@ -9,6 +9,8 @@ export const IpcChannels = {
   getWorkingMusicXml: 'allegre:get-working-musicxml',
   diffCommits: 'allegre:diff-commits',
   restoreCommit: 'allegre:restore-commit',
+  clearHistory: 'allegre:clear-history',
+  dismissTip: 'allegre:dismiss-tip',
   locateMuseScore: 'allegre:locate-musescore',
   pickMuseScore: 'allegre:pick-musescore',
   setMuseScorePath: 'allegre:set-musescore-path',

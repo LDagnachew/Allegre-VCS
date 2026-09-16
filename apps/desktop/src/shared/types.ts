@@ -50,6 +50,10 @@ export interface AppStatus {
   workingHash: string | null
   museScorePath: string | null
   reminder: string
+  /** From package.json via Electron app.getVersion(). */
+  appVersion: string
+  /** Tip ids the user has dismissed. */
+  dismissedTips: string[]
 }
 
 export interface CommitPreview {
@@ -68,6 +72,8 @@ export type CommitProgressStage =
 export interface AppSettings {
   museScorePath?: string
   lastScorePath?: string
+  /** Tip ids the user has dismissed (e.g. "restore-lossy"). */
+  dismissedTips?: string[]
 }
 
 export interface CommitInput {

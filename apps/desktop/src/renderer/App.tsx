@@ -18,6 +18,8 @@ import {
   toneForChangeTypes,
   type MeasureHighlight,
 } from './verovio/highlightMeasures'
+import appIcon from './assets/icon.png'
+import { chronologicalCommits } from './components/ScrubBar'
 
 const emptyStatus: AppStatus = {
   project: null,
@@ -27,6 +29,8 @@ const emptyStatus: AppStatus = {
   workingHash: null,
   museScorePath: null,
   reminder: 'Open a score to start tracking versions.',
+  appVersion: '0.1.0',
+  dismissedTips: [],
 }
 
 function scoreTitle(project: { name: string; msczPath: string } | null): string {
@@ -319,7 +323,11 @@ export function App() {
       setBusy(true)
       setError(null)
       try {
-        await window.allegre.restoreCommit({ commitId: selectedId, mode })
+        const result = await window.allegre.restoreCommit({
+          commitId: selectedId,
+          mode,
+        })
+        if (!result) return
         if (mode === 'overwrite') {
           await loadWorkingScore()
           setPreviewMusicXml(null)
@@ -346,7 +354,14 @@ export function App() {
     setError(null)
     setAllowCommitAfterRestore(true)
     try {
-      await window.allegre.restoreCommit({ commitId: selectedId, mode: 'overwrite' })
+      const result = await window.allegre.restoreCommit({
+        commitId: selectedId,
+        mode: 'overwrite',
+      })
+      if (!result) {
+        setAllowCommitAfterRestore(false)
+        return
+      }
       await loadWorkingScore()
       setPreviewMusicXml(null)
       setPreviewDiff(null)
@@ -426,6 +441,35 @@ export function App() {
     setFocusedMeasure(null)
   }, [fromId, selectedId])
 
+  const clearHistory = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.allegre.clearHistory()
+      if (!result) return
+      setSelectedId(null)
+      setCommitMusicXml(null)
+      setPreviewMusicXml(null)
+      setPreviewDiff(null)
+      setCompareDiff(null)
+      setCompareMode(false)
+      setFromId(null)
+      setFocusedMeasure(null)
+      setAllowCommitAfterRestore(false)
+      setRestoreCommitRequest(null)
+      setScoreSource('working')
+      try {
+        await loadWorkingScore()
+      } catch {
+        // Score may still load via status refresh
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [loadWorkingScore])
+
   const sourceLabel = previewMusicXml
     ? 'Showing: current score (preview)'
     : selectedCommit
@@ -434,13 +478,90 @@ export function App() {
         ? 'Showing: current score'
         : null
 
+  const needsMuseScore =
+    Boolean(status.project) &&
+    !status.museScorePath &&
+    /\.(mscz|mscx)$/i.test(status.project?.msczPath ?? '')
+
+  const showRestoreTip =
+    Boolean(status.project) &&
+    timelineCommits.length > 0 &&
+    !(status.dismissedTips ?? []).includes('restore-lossy')
+
+  const selectCommitFromScrub = useCallback(
+    (id: string) => {
+      setPreviewMusicXml(null)
+      setPreviewDiff(null)
+      setCommitMusicXml(null)
+      setSelectedId(id)
+      setFocusedMeasure(null)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) {
+        return
+      }
+
+      if (event.key === 'Escape' && compareMode) {
+        event.preventDefault()
+        exitCompare()
+        return
+      }
+
+      if (compareMode || busy || timelineCommits.length < 2) return
+
+      const ordered = chronologicalCommits(timelineCommits)
+      const at = ordered.findIndex((c) => c.id === selectedId)
+      const index = at >= 0 ? at : ordered.length - 1
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        const prev = ordered[index - 1]
+        if (prev) selectCommitFromScrub(prev.id)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        const next = ordered[index + 1]
+        if (next) selectCommitFromScrub(next.id)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [
+    busy,
+    compareMode,
+    exitCompare,
+    selectedId,
+    selectCommitFromScrub,
+    timelineCommits,
+  ])
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-name">AllegreVCS</div>
-          <div className="brand-sub" title={status.project?.msczPath}>
-            {scoreTitle(status.project)}
+          <img
+            className="brand-mark"
+            src={appIcon}
+            width={28}
+            height={28}
+            alt=""
+          />
+          <div>
+            <div className="brand-name-row">
+              <div className="brand-name">AllegreVCS</div>
+              <span className="alpha-badge" title={`v${status.appVersion}`}>
+                Alpha
+              </span>
+            </div>
+            <div className="brand-sub" title={status.project?.msczPath}>
+              {scoreTitle(status.project)}
+            </div>
           </div>
         </div>
         <div className="topbar-actions">
@@ -504,19 +625,15 @@ export function App() {
               setFocusedMeasure(null)
               setScoreSource('working')
             }}
-            onSelect={(id) => {
-              setPreviewMusicXml(null)
-              setPreviewDiff(null)
-              setCommitMusicXml(null)
-              setSelectedId(id)
-              setFocusedMeasure(null)
-            }}
+            onSelect={selectCommitFromScrub}
             onEnterCompare={enterCompare}
             onExitCompare={exitCompare}
             onPickSlot={setPicking}
             onSetFrom={setFromCommit}
             onSetTo={setToCommit}
             onSwap={swapCompare}
+            onClearHistory={() => void clearHistory()}
+            clearHistoryDisabled={busy}
           />
         </aside>
 
@@ -538,9 +655,56 @@ export function App() {
               </span>
             )}
           </div>
+          {needsMuseScore && (
+            <div className="info-banner">
+              MuseScore CLI not found. Use <strong>Locate MuseScore…</strong> in
+              the top bar so AllegreVCS can convert <code>.mscz</code> files.
+            </div>
+          )}
+          {showRestoreTip && (
+            <div className="info-banner tip-banner">
+              <div>
+                <strong>Restore is lossy for layout.</strong> Musical content is
+                preserved via MusicXML, but MuseScore engraving tweaks may change.
+                Prefer <em>Export this version…</em> when you want a safe copy.
+              </div>
+              <button
+                type="button"
+                className="btn btn-quiet"
+                disabled={busy}
+                onClick={() => {
+                  void window.allegre.dismissTip('restore-lossy').then(setStatus)
+                }}
+              >
+                Got it
+              </button>
+            </div>
+          )}
           {error && <div className="error-banner">{error}</div>}
-          {selectedIsForActiveScore && !commitMusicXml && !previewMusicXml ? (
+          {!status.project ? (
+            <div className="empty-state">
+              <strong>Open a MuseScore file to begin</strong>
+              <p className="muted" style={{ margin: '0.45rem 0 0.85rem' }}>
+                AllegreVCS watches your score, diffs versions, and keeps a local
+                timeline — MuseScore stays your editor.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void openProject()}
+              >
+                Open score…
+              </button>
+            </div>
+          ) : selectedIsForActiveScore && !commitMusicXml && !previewMusicXml ? (
             <div className="empty-state muted">Loading this version…</div>
+          ) : !displayMusicXml ? (
+            <div className="empty-state muted">
+              {needsMuseScore
+                ? 'Locate MuseScore to render this score.'
+                : 'Loading current score…'}
+            </div>
           ) : (
             <ScoreView
               key={`${status.project?.msczPath ?? 'none'}:${selectedId ?? 'working'}`}
@@ -568,31 +732,37 @@ export function App() {
             </div>
           )}
           {selectedId && (
-            <div className="restore-row">
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() => void restoreAndCommit()}
-              >
-                Restore &amp; commit…
-              </button>
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() => void restore('export')}
-              >
-                Export this version…
-              </button>
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() => void restore('overwrite')}
-              >
-                Restore without committing
-              </button>
+            <div className="restore-block">
+              <p className="restore-note muted">
+                Overwrite confirms first. Export writes a new file and leaves your
+                working score alone.
+              </p>
+              <div className="restore-row">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => void restoreAndCommit()}
+                >
+                  Restore &amp; commit…
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => void restore('export')}
+                >
+                  Export this version…
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => void restore('overwrite')}
+                >
+                  Restore without committing
+                </button>
+              </div>
             </div>
           )}
         </main>
@@ -616,6 +786,15 @@ export function App() {
           />
         </aside>
       </div>
+
+      <footer className="app-footer muted">
+        <span>
+          AllegreVCS v{status.appVersion} · local MuseScore history (alpha)
+        </span>
+        <span className="footer-hints">
+          ← → scrub · Esc exits compare
+        </span>
+      </footer>
     </div>
   )
 }

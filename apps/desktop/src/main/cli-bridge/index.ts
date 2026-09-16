@@ -93,21 +93,67 @@ export async function convertWithMuseScore(
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
 
   // MuseScore 4 on macOS may need -j 1 and can be noisy on stderr.
-  await execFileAsync(museScorePath, ['-o', outputPath, inputPath], {
-    timeout: timeoutMs,
-    maxBuffer: 20 * 1024 * 1024,
-    env: {
-      ...process.env,
-      // Avoid GUI focus issues on some macOS setups
-      QT_QPA_PLATFORM: process.env.QT_QPA_PLATFORM ?? (process.platform === 'linux' ? 'offscreen' : process.env.QT_QPA_PLATFORM),
-    },
-  })
+  try {
+    await execFileAsync(museScorePath, ['-o', outputPath, inputPath], {
+      timeout: timeoutMs,
+      maxBuffer: 20 * 1024 * 1024,
+      env: {
+        ...process.env,
+        // Avoid GUI focus issues on some macOS setups
+        QT_QPA_PLATFORM:
+          process.env.QT_QPA_PLATFORM ??
+          (process.platform === 'linux'
+            ? 'offscreen'
+            : process.env.QT_QPA_PLATFORM),
+      },
+    })
+  } catch (err) {
+    // MuseScore often exits 0 with Qt noise on stderr; only fail hard if
+    // conversion truly failed (no output) or the process crashed.
+    if (!fs.existsSync(outputPath)) {
+      throw new Error(formatMuseScoreError(err, museScorePath, inputPath))
+    }
+  }
 
   if (!fs.existsSync(outputPath)) {
     throw new Error(`MuseScore conversion produced no output at ${outputPath}`)
   }
 
   return outputPath
+}
+
+function formatMuseScoreError(
+  err: unknown,
+  museScorePath: string,
+  inputPath: string,
+): string {
+  const message = err instanceof Error ? err.message : String(err)
+  const stderr =
+    err && typeof err === 'object' && 'stderr' in err
+      ? String((err as { stderr?: unknown }).stderr ?? '')
+      : ''
+  const cleaned = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line &&
+        !line.startsWith('qt.') &&
+        !line.includes('QML element name') &&
+        !line.includes('Fontconfig error'),
+    )
+    .slice(0, 6)
+    .join(' ')
+
+  if (/ETIMEDOUT|timeout/i.test(message)) {
+    return `MuseScore timed out converting ${path.basename(inputPath)}. Try a smaller score or reopen MuseScore once, then retry.`
+  }
+  if (/ENOENT/i.test(message)) {
+    return `MuseScore CLI not runnable at ${museScorePath}. Use Locate MuseScore… in the top bar.`
+  }
+  return cleaned
+    ? `MuseScore could not convert ${path.basename(inputPath)}: ${cleaned}`
+    : `MuseScore could not convert ${path.basename(inputPath)}. Check that the score opens in MuseScore, then try again.`
 }
 
 export async function msczToMusicXml(

@@ -41,6 +41,12 @@ const api = {
   }): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannels.restoreCommit, options),
 
+  clearHistory: (): Promise<{ deletedCommits: number } | null> =>
+    ipcRenderer.invoke(IpcChannels.clearHistory),
+
+  dismissTip: (tipId: string): Promise<AppStatus> =>
+    ipcRenderer.invoke(IpcChannels.dismissTip, tipId),
+
   locateMuseScore: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannels.locateMuseScore),
 

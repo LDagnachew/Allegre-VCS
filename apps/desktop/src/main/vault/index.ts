@@ -341,4 +341,52 @@ export class Vault {
       .prepare(`UPDATE projects SET last_known_hash = ? WHERE id = ?`)
       .run(hash, projectId)
   }
+
+  /**
+   * Delete all commits for a project and drop unreferenced blobs.
+   * Leaves the project row so the score can be opened again.
+   */
+  clearProjectHistory(projectId: string): { deletedCommits: number } {
+    const project = this.getProjectById(projectId)
+    if (!project) throw new Error(`Unknown project: ${projectId}`)
+
+    const before = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS n FROM commits WHERE project_id = ?`)
+        .get(projectId) as { n: number }
+    ).n
+
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare(`DELETE FROM commits WHERE project_id = ?`)
+        .run(projectId)
+      this.db
+        .prepare(
+          `UPDATE projects SET last_known_hash = NULL WHERE id = ?`,
+        )
+        .run(projectId)
+    })
+    tx()
+
+    this.gcOrphanBlobs()
+    return { deletedCommits: before }
+  }
+
+  private gcOrphanBlobs(): void {
+    const used = new Set(
+      (
+        this.db.prepare(`SELECT DISTINCT blob_hash FROM commits`).all() as Array<{
+          blob_hash: string
+        }>
+      ).map((r) => r.blob_hash),
+    )
+
+    if (!fs.existsSync(this.blobsDir)) return
+    for (const name of fs.readdirSync(this.blobsDir)) {
+      if (!name.endsWith('.musicxml')) continue
+      const hash = name.replace(/\.musicxml$/, '')
+      if (used.has(hash)) continue
+      fs.rmSync(path.join(this.blobsDir, name), { force: true })
+    }
+  }
 }

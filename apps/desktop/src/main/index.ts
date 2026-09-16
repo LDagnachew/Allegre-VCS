@@ -1,17 +1,29 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeImage, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { AllegreApp } from './app-service'
 
 const allegre = new AllegreApp()
 
+function resolveAppIconPath(): string | null {
+  const candidates = [
+    join(process.resourcesPath, 'icons', 'icon.png'),
+    join(app.getAppPath(), 'resources', 'icons', 'icon.png'),
+    join(app.getAppPath(), 'build', 'icon.png'),
+  ]
+  return candidates.find((p) => existsSync(p)) ?? null
+}
+
 function createWindow(): BrowserWindow {
+  const iconPath = resolveAppIconPath()
   const win = new BrowserWindow({
     width: 1280,
     height: 840,
     minWidth: 960,
     minHeight: 640,
     title: 'AllegreVCS',
-    backgroundColor: '#1a1b1e',
+    backgroundColor: '#f3ddd4',
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -35,6 +47,11 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(async () => {
+  const iconPath = resolveAppIconPath()
+  if (process.platform === 'darwin' && app.dock && iconPath) {
+    app.dock.setIcon(nativeImage.createFromPath(iconPath))
+  }
+
   const win = createWindow()
   await allegre.init(win)
 

@@ -1,4 +1,5 @@
 import type { Commit } from '../../shared/types'
+import { ScrubBar } from './ScrubBar'
 
 export type CompareSlot = 'from' | 'to'
 
@@ -17,6 +18,8 @@ interface TimelineProps {
   onSetFrom: (id: string) => void
   onSetTo: (id: string) => void
   onSwap: () => void
+  onClearHistory?: () => void
+  clearHistoryDisabled?: boolean
 }
 
 export function commitShortLabel(commit: Commit): string {
@@ -63,6 +66,8 @@ export function Timeline({
   onSetFrom,
   onSetTo,
   onSwap,
+  onClearHistory,
+  clearHistoryDisabled = false,
 }: TimelineProps) {
   const workingSelected = hasOpenScore && selectedId === null && !compareMode
   const fromCommit = commits.find((c) => c.id === fromId) ?? null
@@ -83,8 +88,11 @@ export function Timeline({
 
   if (!hasOpenScore) {
     return (
-      <div className="empty-state muted">
-        Open a score to see its timeline.
+      <div className="empty-state">
+        <strong>No score open</strong>
+        <p className="muted" style={{ margin: '0.4rem 0 0' }}>
+          Use <em>Open score…</em> to load a MuseScore file and start a timeline.
+        </p>
       </div>
     )
   }
@@ -154,6 +162,28 @@ export function Timeline({
           </button>
         )}
       </div>
+
+      {!compareMode && (
+        <ScrubBar
+          commits={commits}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
+      )}
+
+      {onClearHistory && commits.length > 0 && !compareMode && (
+        <div className="timeline-actions">
+          <button
+            type="button"
+            className="btn btn-quiet"
+            style={{ width: '100%' }}
+            disabled={clearHistoryDisabled}
+            onClick={onClearHistory}
+          >
+            Clear history…
+          </button>
+        </div>
+      )}
 
       <ul className="timeline-list">
         <li>

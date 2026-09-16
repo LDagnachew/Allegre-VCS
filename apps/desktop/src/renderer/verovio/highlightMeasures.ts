@@ -8,17 +8,17 @@ export interface MeasureHighlight {
 }
 
 const TONE_FILL: Record<MeasureTone, string> = {
-  changed: 'rgba(15, 106, 106, 0.18)',
-  added: 'rgba(31, 107, 58, 0.20)',
-  removed: 'rgba(155, 44, 44, 0.18)',
-  mixed: 'rgba(180, 110, 20, 0.20)',
+  changed: 'rgba(120, 56, 32, 0.16)',
+  added: 'rgba(61, 107, 69, 0.18)',
+  removed: 'rgba(155, 44, 44, 0.16)',
+  mixed: 'rgba(152, 96, 72, 0.20)',
 }
 
 const TONE_STROKE: Record<MeasureTone, string> = {
-  changed: 'rgba(15, 106, 106, 0.85)',
-  added: 'rgba(31, 107, 58, 0.9)',
+  changed: 'rgba(120, 56, 32, 0.88)',
+  added: 'rgba(61, 107, 69, 0.9)',
   removed: 'rgba(155, 44, 44, 0.9)',
-  mixed: 'rgba(150, 90, 20, 0.9)',
+  mixed: 'rgba(120, 56, 32, 0.75)',
 }
 
 /**
