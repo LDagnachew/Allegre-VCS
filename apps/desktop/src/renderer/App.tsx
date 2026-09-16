@@ -492,11 +492,17 @@ export function App() {
     (id: string) => {
       setPreviewMusicXml(null)
       setPreviewDiff(null)
+      setFocusedMeasure(null)
+      // Re-clicking the active commit must be a no-op. Clearing MusicXML while
+      // selectedId stays the same leaves the score stuck on "Loading…".
+      if (id === selectedId) {
+        setScoreSource('commit')
+        return
+      }
       setCommitMusicXml(null)
       setSelectedId(id)
-      setFocusedMeasure(null)
     },
-    [],
+    [selectedId],
   )
 
   useEffect(() => {
